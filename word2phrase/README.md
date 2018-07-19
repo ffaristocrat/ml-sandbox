@@ -1,13 +1,11 @@
 word2phrase
 ===========
 
-Python 3 fork of the Python 2 port of Mikolov's word2phrase.c from the word2vec toolkit
+Python 3 port of Mikolov's word2phrase.c from the word2vec toolkit based on Travis Brady's Python implementation.
 
 Given a document or documents this program attempts to learn phrases.
 It does so by progressively joining adjacent pairs of words with an '_' character.
 You can then run the code multiple times to create multiword phrases.
-
-Take a look at [example.py](example.py) for an example of using this code from Python. The example requires the textblob module (available via pip) to tokenize the input.
 
 Example using the text8 corpus used in Mikolov's experiments:
 ```
@@ -39,4 +37,5 @@ $ cat text8-phrase-py| tr ' ' '\n' | grep '_' | python wordcount.py 20
 ### More Information
 For more detail on the (very simple) approach here check out:
 - https://github.com/tmikolov/word2vec
+- Original Python 2: https://github.com/travisbrady/word2phrase
 - Mikolov's paper: http://arxiv.org/abs/1310.4546
