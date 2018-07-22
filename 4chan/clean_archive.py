@@ -1,16 +1,25 @@
-from collections import defaultdict
 import re
 import csv
+import sqlite3
+import logging
 
 import numpy as np
 import pandas as pd
 
+from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+from gensim.parsing.preprocessing import STOPWORDS
+from gensim.utils import deaccent
+
+logging.basicConfig(
+    format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
+rootLogger = logging.getLogger()
+rootLogger.setLevel(logging.INFO)
 
 re_reply_to = re.compile(r'>>([0-9]+)(\n|$)')
 re_quote_line = re.compile(r'>.+?(\n|$)')
 re_echoes = re.compile(r'\(\(\(|\)\)\)')
 re_parentheses = re.compile(r'(|\)\()')
-re_punc_to_space = re.compile(r'[\n\r,/:"\]\[}{()!\t*&^@~]')
+re_punc_to_space = re.compile(r'[\n\r,/:"“”\]\[}{()!\t*&^@~-]')
 re_punc_to_none = re.compile(r'[;<>]')
 re_question = re.compile(r'\?')
 re_period = re.compile(r'\.')
@@ -23,12 +32,18 @@ re_numbers = re.compile(r'([0-9]+)')
 re_ellipsis = re.compile(r'\.\.\.')
 
 
-COLUMNS = [
+ALL_COLUMNS = [
     "num", "subnum", "thread_num", "op", "timestamp", "timestamp_expired",
     "preview_orig", "preview_w", "preview_h", "media_filename", "media_w",
     "media_h", "media_size", "media_hash", "media_orig", "spoiler", "deleted",
     "capcode", "email", "name", "trip", "title", "comment", "sticky", "locked",
     "poster_hash", "poster_country", "exif"
+]
+
+
+COLUMNS_TO_KEEP = [
+    "num", "thread_num", "op", "timestamp", "media_w",
+    "media_h", "trip", "comment", "poster_country",
 ]
 
 
@@ -57,14 +72,36 @@ def clean_string(string):
     return string if string else None
 
 
-def process_comment_text(filename):
-    words = defaultdict(int)
+def load_archive(board, conn):
+    filename = f'{board}.csv'
 
-    with open(filename, newline='') as f, \
-            open(f'comments-{filename}', 'wt') as c:
-
-        reader = csv.reader(
+    create = f"""
+        DROP TABLE IF EXISTS {board};
+        CREATE TABLE {board} (
+            num INTEGER,
+            thread_num INTEGER,
+            op INTEGER,
+            timestamp TEXT,
+            media_w INTEGER,
+            media_h INTEGER,
+            trip TEXT,
+            comment TEXT,
+            poster_country TEXT
+        );
+    """
+    conn.executescript(create)
+    
+    insert = f"""
+        INSERT INTO {board}
+            ({','.join(COLUMNS_TO_KEEP)})
+        VALUES
+            ({','.join(['?'] * len(COLUMNS_TO_KEEP))});
+    """
+    print(insert)
+    with open(filename, newline='') as f:
+        reader = csv.DictReader(
             f,
+            fieldnames=ALL_COLUMNS,
             delimiter=',',
             quoting=csv.QUOTE_MINIMAL,
             doublequote=False,
@@ -72,24 +109,36 @@ def process_comment_text(filename):
             escapechar='\\',
         )
 
-        for i, line in enumerate(reader):
-            clean_comment = clean_string(line.pop(22))
-            if clean_comment:
-                for word in clean_comment.split():
-                    words[word] += 1
-                print(clean_comment, file=c)
+        def yield_line():
+            for line in reader:
+                line['comment'] = clean_string(line['comment'])
+                yield [
+                    None if v == 'N' else v
+                    for k, v in line.items()
+                    if k in COLUMNS_TO_KEEP
+                ]
 
-    with open(f'words-{filename}', 'w') as f:
-        for w, c in words.items():
-            print(f'{w}, {c}', file=f)
+        conn.executemany(insert, yield_line())
+
+    index = f"""
+        CREATE INDEX
+            idx_{board}_thread_num
+        ON {board}
+            (thread_num);
+        CREATE INDEX
+            idx_{board}_num
+        ON {board}
+            (num);
+        CREATE INDEX
+            idx_{board}_thread_num_num
+        ON {board}
+            (thread_num, num);
+    """
+
+    conn.executescript(index)
 
 
 def extract_meta(filename):
-    usecols = [
-        "num", "thread_num", "op", "timestamp", "media_w", "media_h", "trip",
-        "poster_country",
-    ]
-
     dtypes = {
         'thread_num': np.uint32,
         'op': np.uint8,
@@ -99,30 +148,27 @@ def extract_meta(filename):
         "trip": np.object,
     }
 
-    print('reading file')
     df = pd.read_csv(
         'pol.csv',
         header=None,
-        names=COLUMNS,
+        names=ALL_COLUMNS,
         doublequote=False,
         quotechar='"',
         na_values=['N'],
         escapechar='\\',
-        usecols=usecols,
+        usecols=COLUMNS_TO_KEEP,
         index_col=0,
         dtype=dtypes,
         parse_dates=['timestamp'],
         date_parser=lambda x: pd.to_datetime(x, unit='s')
     )
 
-    print('tripcode & landscape')
     df.trip = (~df.trip.isna()).astype(np.uint8)
     df['image'] = (df.media_w > 0).astype(np.uint8)
     df['landscape'] = (df.media_w > df.media_h).astype(np.uint8)
     del df['media_w']
     del df['media_h']
 
-    print('country')
     df['country_US'] = (df.poster_country == 'US').astype(np.uint8)
     df['country_CA'] = (df.poster_country == 'CA').astype(np.uint8)
     df['country_GB'] = (df.poster_country.isin(['GB', 'UK'])).astype(np.uint8)
@@ -136,7 +182,6 @@ def extract_meta(filename):
     df['country_null'] = (df.poster_country.isna()).astype(np.uint8)
     del df['poster_country']
 
-    print('hour')
     df['hour'] = df['timestamp'].dt.hour
     df['hour_0_3'] = df.hour.isin([0, 1, 2, 3]).astype(np.uint8)
     df['hour_4_7'] = df.hour.isin([4, 5, 6, 7]).astype(np.uint8)
@@ -147,17 +192,62 @@ def extract_meta(filename):
     del df['hour']
     del df['timestamp']
 
-    print('writing')
     df.to_csv(f'meta-{filename}')
 
 
-def main():
-    filename = 'pol.csv'
-    print('process comment text')
-    process_comment_text(filename)
+class BoardThreads(object):
+    def __init__(self, board, conn):
+        self.board = board
+        self.conn = conn
+        self.minsize = 3
+    
+    def __iter__(self):
+        sql = f"SELECT thread_num, comment, op FROM {self.board} " \
+               "ORDER BY thread_num, num"
+        current_thread = None
+        document = ""
 
-    print('extract meta')
-    extract_meta(filename)
+        for thread_num, comment, op in self.conn.execute(sql):
+            if op == 1:
+                if document and current_thread:
+                    words = [
+                        word for word in document.strip().split()
+                        if len(word) <= self.minsize
+                        and word not in STOPWORDS
+                    ]
+                    
+                    yield TaggedDocument(
+                        words,
+                        [int(current_thread)])
+                document = ""
+            elif comment:
+                document += ' ' + deaccent(str(comment))
+            current_thread = thread_num
+
+
+def build_model(board, conn):
+    model = Doc2Vec(vector_size=100, window=2, min_count=5, workers=4)
+    documents = BoardThreads(board, conn)
+    model.build_vocab(documents=documents)
+    model.train(
+        documents=documents,
+        total_examples=model.corpus_count,
+        epochs=model.iter,
+    )
+
+    model.save(f'{board}-doc2vec.model')
+
+
+def main():
+    board = 'pol'
+    database = '4chan.db'
+    with sqlite3.Connection(database) as conn:
+        # load_archive(board, conn)
+        
+        build_model(board, conn)
+
+    # print('extract meta')
+    # extract_meta(filename)
 
 
 if __name__ == '__main__':
