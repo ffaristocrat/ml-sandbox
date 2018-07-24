@@ -12,47 +12,51 @@ rootLogger = logging.getLogger()
 rootLogger.setLevel(logging.INFO)
 
 
-class BoardThreads(object):
-    def __init__(self, board, conn):
+class FileThreads(object):
+    def __init__(self, board):
         self.board = board
-        self.conn = conn
-        self.minsize = 3
-    
-    def __iter__(self):
-        sql = f"SELECT thread_num, comment, op FROM {self.board} " \
-              "ORDER BY thread_num, num"
-        current_thread = None
-        document = ""
         
-        for thread_num, comment, op in self.conn.execute(sql):
+    def __iter__(self):
+        with open(f'{self.board}.threads', 'r') as f:
+            for line in f.readlines():
+                thread_num, comment = line.split('\t')
+                yield TaggedDocument(comment.split(), [thread_num])
+
+
+def export_threads(board, conn, minsize=3):
+    sql = f"SELECT thread_num, comment, op FROM {board} " \
+           "ORDER BY thread_num, num"
+    current_thread = None
+    document = ""
+    
+    with open(f'{board}.threads', 'wt') as f:
+        for thread_num, comment, op in conn.execute(sql):
             if op == 1:
                 if document and current_thread:
-                    words = [
+                    words = ' '.join([
                         word for word in document.strip().split()
-                        if len(word) <= self.minsize
+                        if len(word) >= minsize
                         and word not in STOPWORDS
-                    ]
-                    
-                    yield TaggedDocument(
-                        words,
-                        [int(current_thread)])
+                    ])
+
+                    print(f'{current_thread}\t{words}', file=f)
                 document = ""
             elif comment:
                 document += ' ' + deaccent(str(comment))
             current_thread = thread_num
 
 
-def build_model(board, conn):
+def build_model(board):
     vocab_file = f'{board}.vocab'
-
     model = Doc2Vec(vector_size=100, window=2, min_count=5, workers=4)
-    documents = BoardThreads(board, conn)
 
+    documents = FileThreads(board)
+    
     if not os.path.isfile(vocab_file):
         model.build_vocab(documents=documents)
-        model.vocabulary.save(vocab_file)
+        model.save(vocab_file)
     else:
-        model.vocabulary.load(vocab_file)
+        model.load(vocab_file)
 
     model.train(
         documents=documents,
@@ -67,7 +71,10 @@ def main():
     board = 'pol'
     database = '4chan.db'
     with sqlite3.Connection(database) as conn:
-        build_model(board, conn)
+        if not os.path.isfile(f'{board}.threads'):
+            export_threads(board, conn)
+    
+    build_model(board)
 
 
 if __name__ == '__main__':
