@@ -48,15 +48,18 @@ def export_threads(board, conn, minsize=3):
 
 def build_model(board):
     vocab_file = f'{board}.vocab'
-    model = Doc2Vec(vector_size=100, window=2, min_count=5, workers=4)
+    model_file = f'{board}-doc2vec.model'
 
     documents = FileThreads(board)
     
-    if not os.path.isfile(vocab_file):
+    if os.path.isfile(model_file):
+        model = Doc2Vec.load(model_file)
+    elif os.path.isfile(vocab_file):
+        model = Doc2Vec.load(vocab_file)
+    else:
+        model = Doc2Vec(vector_size=100, window=2, min_count=5, workers=4)
         model.build_vocab(documents=documents)
         model.save(vocab_file)
-    else:
-        model.load(vocab_file)
 
     model.train(
         documents=documents,
@@ -65,6 +68,7 @@ def build_model(board):
     )
     
     model.save(f'{board}-doc2vec.model')
+    model.docvecs.save_word2vec_format(f'{board}-doc2vec.vectors')
 
 
 def main():
