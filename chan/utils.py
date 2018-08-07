@@ -81,15 +81,16 @@ class Benchmark(object):
         h, m = divmod(m, 60)
         d, h = divmod(h, 24)
         if d:
-            msg = f'{self.msg}: ' \
-                  f'{d} days, {h} hours, {m} minutes, {int(s)} seconds'
+            msg = f'{self.msg}: {d:.0f} days, ' \
+                  f'{h:.0f} hours, {m:.0f} minutes, {s:.0f} seconds'
         elif h:
-            msg = f'{self.msg}: {h} hours, {m} minutes, {int(s)} seconds'
+            msg = f'{self.msg}: ' \
+                  f'{h:.0f} hours, {m:.0f} minutes, {s:.0f} seconds'
         elif m:
-            msg = f'{self.msg}: {m:0} minutes, {int(s)} seconds'
+            msg = f'{self.msg}: {m:.0f} minutes, {s:.0f} seconds'
         else:
             msg = f'{self.msg}: {s:.3f} seconds'
-        
+
         return msg
     
     def current(self):
@@ -98,9 +99,9 @@ class Benchmark(object):
         return t
 
 
-def cluster(df):
+def cluster(df, n_clusters: int=8):
     matrix = df.astype(np.float64).values
-    df['cluster'] = MiniBatchKMeans(n_clusters=8).fit_predict(matrix)
+    df['cluster'] = MiniBatchKMeans(n_clusters=n_clusters).fit_predict(matrix)
     
     return df[['cluster']]
 
