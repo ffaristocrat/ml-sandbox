@@ -191,24 +191,24 @@ def export_threads(board, conn, minsize=3):
             current_thread = thread_num
 
 
-def build_doc2vec_model(board):
+def build_doc2vec_model(board, vectors: int):
     documents = FileThreads(board)
-    model = Doc2Vec(vector_size=100, window=2, min_count=5, workers=4)
+    model = Doc2Vec(vector_size=vectors, window=2, min_count=5, workers=4)
     model.build_vocab(documents=documents)
-    
+
     model.train(
         documents=documents,
         total_examples=model.corpus_count,
         epochs=model.iter,
     )
-    
-    model.save(f'{board}-doc2vec.model')
-    model.docvecs.save_word2vec_format(f'{board}-doc2vec.vectors')
+
+    model.save(f'{board}.model')
+    model.docvecs.save_word2vec_format(f'{board}.vectors')
 
 
 def load_sample_vectors(board, frac: float) -> pd.DataFrame:
     df = pd.read_csv(
-        f'{board}-doc2vec.vectors',
+        f'{board}.vectors',
         skiprows=1, index_col=0, delim_whitespace=True, header=None)
     df['thread_id'] = df.index.str.replace('\*dt_', '')
     df.set_index('thread_id', inplace=True)
@@ -219,16 +219,56 @@ def load_sample_vectors(board, frac: float) -> pd.DataFrame:
     return df
 
 
+def load_clusters(board: str, conn):
+    create = f"""
+        DROP TABLE IF EXISTS {board}_clusters;
+        CREATE TABLE {board}_clusters (
+            thread_num INTEGER,
+            cluster INTEGER
+        );
+    """
+    conn.executescript(create)
+
+    insert = f"""
+        INSERT INTO {board}_clusters
+            (thread_num, cluster)
+        VALUES
+            (?, ?);
+    """
+
+    with open(f'{board}.clusters', newline='') as f:
+        reader = csv.reader(f)
+        conn.executemany(insert, reader)
+
+    index = f"""
+        CREATE INDEX
+            idx_{board}_clusters_thread_num
+        ON {board}_clusters
+            (thread_num);
+        CREATE INDEX
+            idx_{board}_clusters
+        ON {board}_clusters
+            (cluster);
+        CREATE INDEX
+            idx_{board}_clusters_thread_num_clusters
+        ON {board}_clusters
+            (thread_num, cluster);
+    """
+
+    conn.executescript(index)
+
+
 def main():
     board = 'pol'
     database = 'chan.db'
+    vectors = 200
 
     if not os.path.isfile(f'{board}.meta'):
         with Benchmark('extract_meta'):
             extract_meta(board)
 
-    with sqlite3.Connection(database) as conn:
-        if not os.path.isfile(f'{board}.threads'):
+    if not os.path.isfile(f'{board}.threads'):
+        with sqlite3.Connection(database) as conn:
             with Benchmark('load_archive'):
                 load_archive(board, conn)
 
@@ -237,16 +277,21 @@ def main():
 
     if not os.path.isfile(f'{board}.vectors'):
         with Benchmark('build_doc2vec_model'):
-            build_doc2vec_model(board)
+            build_doc2vec_model(board, vectors)
 
-    with Benchmark('load_sample_vectors'):
-        df = load_sample_vectors(board, 1)
+    if not os.path.isfile(f'{board}.clusters'):
+        with Benchmark('load_sample_vectors'):
+            df = load_sample_vectors(board, 1)
+    
+        with Benchmark('cluster'):
+            df = cluster(df)
 
-    with Benchmark('cluster'):
-        df = cluster(df)
+        with Benchmark('save_clusters'):
+            df.to_csv(f'{board}.clusters', index=False, header=False)
 
-    with Benchmark('save_clusters'):
-        df.to_csv(f'{board}-cluster.csv', index=True, header=True)
+    with Benchmark('load_clusters'):
+        with sqlite3.Connection(database) as conn:
+            load_clusters(board, conn)
 
 
 main()
