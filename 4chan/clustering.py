@@ -2,25 +2,23 @@ import pandas as pd
 import numpy as np
 import sklearn as skv
 import sklearn.cluster as sc
-import re
 
 
-df = pd.read_csv('meta-pol.csv')
-meta_cols = [
-    'trip', 'image', 'landscape',
-    'country_US', 'country_CA', 'country_GB',
-    'country_RU', 'country_AU', 'country_EU', 'country_null',
-    'hour_0_3', 'hour_4_7', 'hour_8_11',
-    'hour_12_15', 'hour_16_19', 'hour_20_23'
+from gensim.models.doc2vec import Doc2Vec
+
+ALL_COLUMNS = [
+    "num", "subnum", "thread_num", "op", "timestamp", "timestamp_expired",
+    "preview_orig", "preview_w", "preview_h", "media_filename", "media_w",
+    "media_h", "media_size", "media_hash", "media_orig", "spoiler", "deleted",
+    "capcode", "email", "name", "trip", "title", "comment", "sticky", "locked",
+    "poster_hash", "poster_country", "exif"
 ]
-threads = df.groupby('thread_num').mean()[meta_cols]
-threads['replies'] = (
-        df.groupby('thread_num')['num'].count() / 100.0
-).clip(0.0, 1.0)
-matrix = threads[meta_cols + ['replies']].astype(np.float64).values
 
-threads['cluster'] = sc.AgglomerativeClustering(
-    n_clusters=8, linkage='ward').fit_predict(matrix)
+
+COLUMNS_TO_KEEP = [
+    "num", "thread_num", "op", "timestamp", "media_w",
+    "media_h", "trip", "comment", "poster_country",
+]
 
 
 def extract_meta(filename):
@@ -78,3 +76,32 @@ def extract_meta(filename):
     del df['timestamp']
 
     df.to_csv(f'meta-{filename}')
+
+
+def load_model(board):
+    model = Doc2Vec.load(f'{board}-doc2vec.model')
+    return model
+
+
+def cluster_threads(board):
+    df = pd.read_csv(
+        f'{board}-doc2vec.vectors',
+        skiprows=1, index_col=0, delim_whitespace=True, header=None)
+    
+    df.sample(frac=0.1, replace=True)
+    df['thread_id'] = df.index.str.replace('\*dt_', '')
+    
+    matrix = df.astype(np.float64).values
+    df['cluster'] = sc.AgglomerativeClustering(
+        n_clusters=8, linkage='ward').fit_predict(matrix)
+    
+    return df[['thread_id', 'cluster']]
+
+
+def main():
+    board = 'pol'
+    df = cluster_threads(board)
+    df.to_csv(f'{board}-cluster.csv', index=False, header=True)
+
+
+main()
