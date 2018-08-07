@@ -7,12 +7,10 @@ from datetime import datetime
 from typing import List, Dict
 
 import pandas as pd
-import numpy as np
 
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
-from sklearn.cluster import MiniBatchKMeans
 
-from chan.utils import Benchmark, tokenize_string
+from chan.utils import Benchmark, tokenize_string, cluster
 
 logging.basicConfig(
     format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
@@ -221,13 +219,6 @@ def load_sample_vectors(board, frac: float) -> pd.DataFrame:
     return df
 
 
-def cluster_threads(df):
-    matrix = df.astype(np.float64).values
-    df['cluster'] = MiniBatchKMeans(n_clusters=8).fit_predict(matrix)
-    
-    return df[['cluster']]
-
-
 def main():
     board = 'pol'
     database = 'chan.db'
@@ -251,8 +242,8 @@ def main():
     with Benchmark('load_sample_vectors'):
         df = load_sample_vectors(board, 1)
 
-    with Benchmark('cluster_threads'):
-        df = cluster_threads(df)
+    with Benchmark('cluster'):
+        df = cluster(df)
 
     with Benchmark('save_clusters'):
         df.to_csv(f'{board}-cluster.csv', index=True, header=True)

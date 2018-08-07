@@ -1,6 +1,9 @@
 import timeit
 import re
 
+import numpy as np
+from sklearn.cluster import MiniBatchKMeans
+
 from gensim.parsing.preprocessing import STOPWORDS
 from gensim.utils import deaccent
 
@@ -93,3 +96,12 @@ class Benchmark(object):
         t = timeit.default_timer() - self.start
         print(self.make_msg(t))
         return t
+
+
+def cluster(df):
+    matrix = df.astype(np.float64).values
+    df['cluster'] = MiniBatchKMeans(n_clusters=8).fit_predict(matrix)
+    
+    return df[['cluster']]
+
+
