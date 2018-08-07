@@ -1,19 +1,18 @@
 import sqlite3
 import logging
 import os.path
-import re
 import csv
+import datetime
+from datetime import datetime
+from typing import List, Dict
 
 import pandas as pd
 import numpy as np
-import sklearn as skv
 
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
-from gensim.parsing.preprocessing import STOPWORDS
-from gensim.utils import deaccent
-from sklearn.cluster import KMeans, MiniBatchKMeans
+from sklearn.cluster import MiniBatchKMeans
 
-from chan.utils import Benchmark, clean_string
+from chan.utils import Benchmark, tokenize_string
 
 logging.basicConfig(
     format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
@@ -28,15 +27,72 @@ ALL_COLUMNS = [
     "capcode", "email", "name", "trip", "title", "comment", "sticky", "locked",
     "poster_hash", "poster_country", "exif"
 ]
-COLUMNS_TO_KEEP = [
-    "num", "thread_num", "op", "timestamp", "media_w",
-    "media_h", "trip", "comment", "poster_country",
+
+DATABASE_COLUMNS = [
+    "num", "thread_num", "op", "timestamp", "comment",
 ]
+
+META_COLUMNS = [
+    "num", "thread_num", "op", "timestamp", "media_w", "media_h", "trip",
+    "poster_country",
+]
+
+COUNTRIES = {
+    'US': ['US'],
+    'CA': ['CA'],
+    'RU': ['RU'],
+    'AU': ['AU'],
+    'UK': ['UK', 'GB'],
+    'EU': [
+        'BE', 'BG', 'CZ', 'DK', 'DE', 'EE', 'IE', 'EL', 'ES', 'FR',
+        'HR', 'IT', 'CY', 'LV', 'LT', 'LU', 'HU', 'MT', 'NL', 'AT',
+        'PL', 'PT', 'RO', 'SI', 'SK', 'FI', 'SE',
+    ]
+}
+
+HOURS = {
+    '0_3': list(range(0, 4)),
+    '4_7': list(range(4, 8)),
+    '8_11': list(range(8, 12)),
+    '12_15': list(range(12, 16)),
+    '16_19': list(range(16, 20)),
+    '20_23': list(range(20, 24)),
+}
+
+
+def yield_line(board, parse_func):
+    with open(f'{board}.csv', newline='') as f:
+        reader = csv.DictReader(
+            f,
+            fieldnames=ALL_COLUMNS,
+            delimiter=',',
+            quoting=csv.QUOTE_MINIMAL,
+            doublequote=False,
+            quotechar='"',
+            escapechar='\\',
+        )
+    
+        for line in reader:
+            yield parse_func(line)
+
+
+def parse_for_database(line: Dict) -> List:
+    return [
+        None if v == 'N' else v
+        for k, v in line.items()
+        if k in DATABASE_COLUMNS
+    ]
+
+
+def parse_for_meta(line: Dict) -> Dict:
+    return {
+        k: None if v == 'N' else v
+        for k, v in line.items()
+        if k in META_COLUMNS
+    }
 
 
 def load_archive(board, conn):
-    filename = f'{board}.csv'
-    
     create = f"""
         DROP TABLE IF EXISTS {board};
         CREATE TABLE {board} (
@@ -55,33 +111,13 @@ def load_archive(board, conn):
 
     insert = f"""
         INSERT INTO {board}
-            ({','.join(COLUMNS_TO_KEEP)})
+            ({','.join(DATABASE_COLUMNS)})
         VALUES
-            ({','.join(['?'] * len(COLUMNS_TO_KEEP))});
+            ({','.join(['?'] * len(DATABASE_COLUMNS))});
     """
-    
-    with open(filename, newline='') as f:
-        reader = csv.DictReader(
-            f,
-            fieldnames=ALL_COLUMNS,
-            delimiter=',',
-            quoting=csv.QUOTE_MINIMAL,
-            doublequote=False,
-            quotechar='"',
-            escapechar='\\',
-        )
-        
-        def yield_line():
-            for line in reader:
-                line['comment'] = clean_string(line['comment'])
-                yield [
-                    None if v == 'N' else v
-                    for k, v in line.items()
-                    if k in COLUMNS_TO_KEEP
-                ]
-        
-        conn.executemany(insert, yield_line())
-    
+
+    conn.executemany(insert, yield_line(board, parse_for_database))
+
     index = f"""
         CREATE INDEX
             idx_{board}_thread_num
@@ -101,60 +137,30 @@ def load_archive(board, conn):
 
 
 def extract_meta(board):
-    dtypes = {
-        'thread_num': np.uint32,
-        'op': np.uint8,
-        "media_w": np.uint32,
-        "media_h": np.uint32,
-        "poster_country": np.object,
-        "trip": np.object,
-    }
+    with open(f'{board}.meta', 'wt') as f:
+        writer = None
 
-    df = pd.read_csv(
-        f'{board}.csv',
-        header=None,
-        names=ALL_COLUMNS,
-        doublequote=False,
-        quotechar='"',
-        na_values=['N'],
-        escapechar='\\',
-        usecols=COLUMNS_TO_KEEP,
-        index_col=0,
-        dtype=dtypes,
-        parse_dates=['timestamp'],
-        date_parser=lambda x: pd.to_datetime(x, unit='s')
-    )
+        for df in yield_line(board, parse_for_meta):
+            df['trip'] = 1 if df['trip'] else 0
+            df['image'] = 1 if int(df['media_w']) > 0 else 0
+            df['landscape'] = \
+                1 if int(df['media_w']) > int(df['media_h']) else 0
 
-    df.trip = (~df.trip.isna()).astype(np.uint8)
-    df['image'] = (df.media_w > 0).astype(np.uint8)
-    df['landscape'] = (df.media_w > df.media_h).astype(np.uint8)
-    del df['media_w']
-    del df['media_h']
+            for k, v in COUNTRIES.items():
+                df[f'country_{k}'] = 1 if df['poster_country'] in v else 0
+            df['country_null'] = 1 if not df['poster_country'] else 0
 
-    df['country_US'] = (df.poster_country == 'US').astype(np.uint8)
-    df['country_CA'] = (df.poster_country == 'CA').astype(np.uint8)
-    df['country_GB'] = (df.poster_country.isin(['GB', 'UK'])).astype(np.uint8)
-    df['country_RU'] = (df.poster_country == 'RU').astype(np.uint8)
-    df['country_AU'] = (df.poster_country == 'AU').astype(np.uint8)
-    df['country_EU'] = (df.poster_country.isin([
-        'BE', 'BG', 'CZ', 'DK', 'DE', 'EE', 'IE', 'EL', 'ES', 'FR', 'HR', 'IT',
-        'CY', 'LV', 'LT', 'LU', 'HU', 'MT', 'NL', 'AT', 'PL', 'PT', 'RO', 'SI',
-        'SK', 'FI', 'SE',
-    ])).astype(np.uint8)
-    df['country_null'] = (df.poster_country.isna()).astype(np.uint8)
-    del df['poster_country']
+            df['timestamp'] = datetime.fromtimestamp(int(df['timestamp']))
+            df['hour'] = df['timestamp'].hour
 
-    df['hour'] = df['timestamp'].dt.hour
-    df['hour_0_3'] = df.hour.isin([0, 1, 2, 3]).astype(np.uint8)
-    df['hour_4_7'] = df.hour.isin([4, 5, 6, 7]).astype(np.uint8)
-    df['hour_8_11'] = df.hour.isin([8, 9, 10, 11]).astype(np.uint8)
-    df['hour_12_15'] = df.hour.isin([12, 13, 14, 15]).astype(np.uint8)
-    df['hour_16_19'] = df.hour.isin([16, 17, 18, 19]).astype(np.uint8)
-    df['hour_20_23'] = df.hour.isin([20, 21, 22, 23]).astype(np.uint8)
-    del df['hour']
-    del df['timestamp']
+            for k, v in HOURS.items():
+                df['hour_{k{'] = 1 if df['hour'] in v else 0
 
-    df.to_csv(f'{board}.meta')
+            if not writer:
+                writer = csv.DictWriter(f, fieldnames=df.keys())
+                writer.writeheader()
+
+            writer.writerow(df)
 
 
 class FileThreads(object):
@@ -177,16 +183,13 @@ def export_threads(board, conn, minsize=3):
     with open(f'{board}.threads', 'wt') as f:
         for thread_num, comment, op in conn.execute(sql):
             if op == 1:
-                if document and current_thread:
-                    words = ' '.join([
-                        word for word in document.strip().split()
-                        if len(word) >= minsize and word not in STOPWORDS
-                    ])
-                    
-                    print(f'{current_thread}\t{words}', file=f)
+                if current_thread:
+                    tokens = tokenize_string(document, minsize)
+                    if tokens:
+                        print(f'{current_thread}\t{tokens}', file=f)
                 document = ""
             elif comment:
-                document += ' ' + deaccent(str(comment))
+                document += ' ' + str(comment)
             current_thread = thread_num
 
 
@@ -229,16 +232,21 @@ def main():
     board = 'pol'
     database = 'chan.db'
 
+    if not os.path.isfile(f'{board}.meta'):
+        with Benchmark('extract_meta'):
+            extract_meta(board)
+
     with sqlite3.Connection(database) as conn:
         if not os.path.isfile(f'{board}.threads'):
             with Benchmark('load_archive'):
                 load_archive(board, conn)
-    
+
             with Benchmark('export_threads'):
                 export_threads(board, conn)
 
-    with Benchmark('build_doc2vec_model'):
-        build_doc2vec_model(board)
+    if not os.path.isfile(f'{board}.vectors'):
+        with Benchmark('build_doc2vec_model'):
+            build_doc2vec_model(board)
 
     with Benchmark('load_sample_vectors'):
         df = load_sample_vectors(board, 1)

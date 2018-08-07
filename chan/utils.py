@@ -1,6 +1,9 @@
 import timeit
 import re
 
+from gensim.parsing.preprocessing import STOPWORDS
+from gensim.utils import deaccent
+
 
 re_reply_to = re.compile(r'>>([0-9]+)(\n|$)')
 re_quote_line = re.compile(r'>.+?(\n|$)')
@@ -19,13 +22,13 @@ re_numbers = re.compile(r'([0-9]+)')
 re_ellipsis = re.compile(r'\.\.\.')
 
 
-def clean_string(string):
+def tokenize_string(string, minsize: int=3):
     # Empty strings
-    if string == 'N':
+    if not string or string == 'N':
         return None
 
-    string = string.lower()
-    
+    string = deaccent(string).lower()
+
     # Remove quote text
     string = re.sub(re_reply_to, '', string)
     string = re.sub(re_quote_line, '', string)
@@ -47,7 +50,11 @@ def clean_string(string):
 
     # Replace all other punc to spaces and remove whitespace in between
     string = re.sub(re_punc_to_space, ' ', string)
-    string = ' '.join(string.strip().split())
+    
+    string = ' '.join([
+        word for word in [w.strip() for w in string.split()]
+        if len(word) >= minsize and word not in STOPWORDS
+    ])
 
     return string if string else None
 
