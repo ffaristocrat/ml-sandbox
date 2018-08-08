@@ -1,10 +1,10 @@
 import sqlite3
 import logging
-import os.path
+import os.path as op
 import csv
 import datetime
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Callable
 
 import pandas as pd
 
@@ -58,8 +58,9 @@ HOURS = {
 }
 
 
-def yield_line(board, parse_func):
-    with open(f'{board}.csv', newline='') as f:
+def yield_line(board: str, parse_func: Callable, input_dir: str='.'):
+    filename = op.join(input_dir, f'{board}.csv')
+    with open(filename, newline='') as f:
         reader = csv.DictReader(
             f,
             fieldnames=ALL_COLUMNS,
@@ -90,7 +91,7 @@ def parse_for_meta(line: Dict) -> Dict:
     }
 
 
-def load_archive(board, conn):
+def load_archive(board: str, conn: sqlite3.Connection, input_dir: str='.'):
     create = f"""
         DROP TABLE IF EXISTS {board};
         CREATE TABLE {board} (
@@ -114,7 +115,8 @@ def load_archive(board, conn):
             ({','.join(['?'] * len(DATABASE_COLUMNS))});
     """
 
-    conn.executemany(insert, yield_line(board, parse_for_database))
+    conn.executemany(
+        insert, yield_line(board, parse_for_database, input_dir=input_dir))
 
     index = f"""
         CREATE INDEX
@@ -134,8 +136,9 @@ def load_archive(board, conn):
     conn.executescript(index)
 
 
-def extract_meta(board):
-    with open(f'{board}.meta', 'wt') as f:
+def extract_meta(board: str, input_dir: str='.'):
+    filename = op.join(input_dir, f'{board}.meta')
+    with open(filename, 'wt') as f:
         writer = None
 
         for df in yield_line(board, parse_for_meta):
@@ -162,25 +165,28 @@ def extract_meta(board):
 
 
 class FileThreads(object):
-    def __init__(self, board):
+    def __init__(self, board: str, input_dir: str='.'):
         self.board = board
+        self.input_dir = input_dir
     
     def __iter__(self):
-        with open(f'{self.board}.threads', 'r') as f:
+        filename = op.join(self.input_dir, f'{self.board}.threads')
+        with open(filename, 'r') as f:
             for line in f.readlines():
                 thread_num, comment = line.split('\t')
                 yield TaggedDocument(comment.split(), [thread_num])
 
 
-def export_threads(board, conn, minsize=3):
+def export_threads(board, conn, minsize=3, input_dir: str='.'):
     sql = f"SELECT thread_num, comment, op FROM {board} " \
           "ORDER BY thread_num, num"
     current_thread = None
     document = ""
-    
-    with open(f'{board}.threads', 'wt') as f:
-        for thread_num, comment, op in conn.execute(sql):
-            if op == 1:
+    filename = op.join(input_dir, f'{board}.threads')
+
+    with open(filename, 'wt') as f:
+        for thread_num, comment, orig in conn.execute(sql):
+            if orig == 1:
                 if current_thread:
                     tokens = tokenize_string(document, minsize)
                     if tokens:
@@ -191,8 +197,8 @@ def export_threads(board, conn, minsize=3):
             current_thread = thread_num
 
 
-def build_doc2vec_model(board, vectors: int):
-    documents = FileThreads(board)
+def build_doc2vec_model(board, vectors: int, input_dir: str='.'):
+    documents = FileThreads(board, input_dir=input_dir)
     model = Doc2Vec(vector_size=vectors, window=2, min_count=5, workers=4)
     model.build_vocab(documents=documents)
 
@@ -202,14 +208,17 @@ def build_doc2vec_model(board, vectors: int):
         epochs=model.iter,
     )
 
-    model.save(f'{board}.model')
-    model.docvecs.save_word2vec_format(f'{board}.vectors')
+    filename = op.join(input_dir, f'{board}.model')
+    model.save(filename)
+    filename = op.join(input_dir, f'{board}.vectors')
+    model.docvecs.save_word2vec_format(filename)
 
 
-def load_sample_vectors(board, frac: float) -> pd.DataFrame:
+def load_sample_vectors(board: str, frac: float, input_dir: str='.'
+                        ) -> pd.DataFrame:
+    filename = op.join(input_dir, f'{board}.vectors')
     df = pd.read_csv(
-        f'{board}.vectors',
-        skiprows=1, index_col=0, delim_whitespace=True, header=None)
+        filename, skiprows=1, index_col=0, delim_whitespace=True, header=None)
     df['thread_id'] = df.index.str.replace('\*dt_', '')
     df.set_index('thread_id', inplace=True)
 
@@ -219,7 +228,7 @@ def load_sample_vectors(board, frac: float) -> pd.DataFrame:
     return df
 
 
-def load_clusters(board: str, conn):
+def load_clusters(board: str, conn: sqlite3.Connection, input_dir: str='.'):
     create = f"""
         DROP TABLE IF EXISTS {board}_clusters;
         CREATE TABLE {board}_clusters (
@@ -236,7 +245,8 @@ def load_clusters(board: str, conn):
             (?, ?);
     """
 
-    with open(f'{board}.clusters', newline='') as f:
+    filename = op.join(input_dir, f'{board}.clusters')
+    with open(filename, newline='') as f:
         reader = csv.reader(f)
         conn.executemany(insert, reader)
 
@@ -262,36 +272,42 @@ def main():
     board = 'pol'
     database = 'chan.db'
     vectors = 200
+    input_dir = '.'
 
-    if not os.path.isfile(f'{board}.meta'):
+    filename = op.join(input_dir, f'{board}.meta')
+    if not op.isfile(filename):
         with Benchmark('extract_meta'):
-            extract_meta(board)
+            extract_meta(board, input_dir=input_dir)
 
-    if not os.path.isfile(f'{board}.threads'):
+    filename = op.join(input_dir, f'{board}.threads')
+    if not op.isfile(filename):
         with sqlite3.Connection(database) as conn:
             with Benchmark('load_archive'):
-                load_archive(board, conn)
+                load_archive(board, conn, input_dir=input_dir)
 
             with Benchmark('export_threads'):
-                export_threads(board, conn)
+                export_threads(board, conn, input_dir=input_dir)
 
-    if not os.path.isfile(f'{board}.vectors'):
+    filename = op.join(input_dir, f'{board}.vectors')
+    if not op.isfile(filename):
         with Benchmark('build_doc2vec_model'):
-            build_doc2vec_model(board, vectors)
+            build_doc2vec_model(board, vectors, input_dir=input_dir)
 
-    if not os.path.isfile(f'{board}.clusters'):
+    filename = op.join(input_dir, f'{board}.clusters')
+    if not op.isfile(filename):
         with Benchmark('load_sample_vectors'):
-            df = load_sample_vectors(board, 1)
+            df = load_sample_vectors(board, 1.0, input_dir=input_dir)
     
         with Benchmark('cluster'):
-            df = cluster(df)
+            df = cluster(df, 8)
 
         with Benchmark('save_clusters'):
-            df.to_csv(f'{board}.clusters', index=False, header=False)
+            df.to_csv(filename, header=False)
 
     with Benchmark('load_clusters'):
         with sqlite3.Connection(database) as conn:
-            load_clusters(board, conn)
+            load_clusters(board, conn, input_dir=input_dir)
 
 
-main()
+if __name__ == '__main__':
+    main()
