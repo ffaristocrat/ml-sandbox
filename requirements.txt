@@ -3,3 +3,4 @@ scikit-learn
 gensim
 numpy
 pillow
+tensorflow
