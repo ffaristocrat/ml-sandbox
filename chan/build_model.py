@@ -177,7 +177,8 @@ class FileThreads(object):
                 yield TaggedDocument(comment.split(), [thread_num])
 
 
-def export_threads(board, conn, minsize=3, input_dir: str='.'):
+def export_threads(board: str, conn: sqlite3.Connection, minsize: int=3,
+                   input_dir: str='.'):
     sql = f"SELECT thread_num, comment, op FROM {board} " \
           "ORDER BY thread_num, num"
     current_thread = None
@@ -197,7 +198,7 @@ def export_threads(board, conn, minsize=3, input_dir: str='.'):
             current_thread = thread_num
 
 
-def build_doc2vec_model(board, vectors: int, input_dir: str='.'):
+def build_doc2vec_model(board: str, vectors: int, input_dir: str='.'):
     documents = FileThreads(board, input_dir=input_dir)
     model = Doc2Vec(vector_size=vectors, window=2, min_count=5, workers=4)
     model.build_vocab(documents=documents)
@@ -214,7 +215,7 @@ def build_doc2vec_model(board, vectors: int, input_dir: str='.'):
     model.docvecs.save_word2vec_format(filename)
 
 
-def load_sample_vectors(board: str, frac: float, input_dir: str='.'
+def load_sample_vectors(board: str, frac: float=1.0, input_dir: str='.'
                         ) -> pd.DataFrame:
     filename = op.join(input_dir, f'{board}.vectors')
     df = pd.read_csv(
@@ -296,8 +297,8 @@ def main():
     filename = op.join(input_dir, f'{board}.clusters')
     if not op.isfile(filename):
         with Benchmark('load_sample_vectors'):
-            df = load_sample_vectors(board, 1.0, input_dir=input_dir)
-    
+            df = load_sample_vectors(board, frac=1.0, input_dir=input_dir)
+
         with Benchmark('cluster'):
             df = cluster(df, 8)
 
