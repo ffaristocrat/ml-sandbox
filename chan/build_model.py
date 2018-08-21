@@ -10,6 +10,9 @@ import pandas as pd
 
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 from gensim.models.word2vec import Word2Vec, LineSentence
+from gensim.models.phrases import Phrases, Phraser
+from gensim.corpora.dictionary import Dictionary
+from gensim.models.ldamulticore import LdaMulticore
 
 from chan.utils import Benchmark, tokenize_string, cluster
 
@@ -165,17 +168,20 @@ def extract_meta(board: str, input_dir: str='.'):
             writer.writerow(df)
 
 
-class FileThreads(object):
-    def __init__(self, board: str, input_dir: str='.'):
+class ReadThreads(object):
+    def __init__(self, board: str, input_dir: str='.',
+                 file_type: str='threads', return_func: Callable=None):
         self.board = board
         self.input_dir = input_dir
-    
+        self.returner = return_func
+        self.file_type = file_type
+
     def __iter__(self):
-        filename = op.join(self.input_dir, f'{self.board}.threads')
+        filename = op.join(self.input_dir, f'{self.board}.{self.file_type}')
         with open(filename, 'r') as f:
             for line in f.readlines():
                 thread_num, comment = line.split('\t')
-                yield TaggedDocument(comment.split(), [thread_num])
+                yield self.returner(thread_num, comment)
 
 
 def export_threads(board: str, conn: sqlite3.Connection, minsize: int=3,
@@ -199,8 +205,53 @@ def export_threads(board: str, conn: sqlite3.Connection, minsize: int=3,
             current_thread = thread_num
 
 
+def build_phraser(board: str, input_dir: str='.'):
+    tokens = ReadThreads(board, input_dir, return_func=lambda x, y: y.split())
+    model = Phrases(tokens, threshold=100)
+    phraser = Phraser(model)
+    filename = op.join(input_dir, f'{board}.phraser')
+    phraser.save(filename)
+    
+
+def build_phrases(board: str, input_dir: str='.'):
+    threads = ReadThreads(
+        board, input_dir, return_func=lambda x, y: (x, y.split()))
+    filename = op.join(input_dir, f'{board}.phraser')
+    phraser = Phraser.load(filename)
+
+    filename = op.join(input_dir, f'{board}.phrases')
+    with open(filename, 'wt') as f:
+        for num, thread in threads:
+            line = ' '.join(phraser[thread])
+            print(f'{num}\t{line}', file=f)
+
+
+def build_dictionary(board: str, input_dir: str='.'):
+    documents = ReadThreads(
+        board, input_dir=input_dir, file_type='phrases',
+        return_func=lambda x, y: y.split())
+    dictionary = Dictionary(documents)
+    dictionary.save(f'{board}.dictionary')
+
+
+def build_lda_model(board: str, input_dir: str='.'):
+    dictionary: Dictionary = Dictionary.load(f'{board}.dictionary')
+    documents = ReadThreads(
+        board, input_dir=input_dir, file_type='phrases',
+        return_func=lambda x, y: dictionary.doc2bow(y.split()))
+
+    lda = LdaMulticore(documents, )
+
+    filename = op.join(input_dir, f'{board}.lda')
+    lda.save(filename)
+
+
 def build_doc2vec_model(board: str, vectors: int, input_dir: str='.'):
-    documents = FileThreads(board, input_dir=input_dir)
+    filename = op.join(input_dir, f'{board}.phraser')
+    phraser = Phraser.load(filename)
+    documents = ReadThreads(
+        board, input_dir=input_dir, file_type='phrases',
+        return_func=lambda x, y: TaggedDocument(phraser[y.split()], [x]))
     model = Doc2Vec(vector_size=vectors, window=2, min_count=5, workers=4)
     model.build_vocab(documents=documents)
 
@@ -210,25 +261,27 @@ def build_doc2vec_model(board: str, vectors: int, input_dir: str='.'):
         epochs=model.iter,
     )
 
-    filename = op.join(input_dir, f'{board}.model')
+    filename = op.join(input_dir, f'{board}.doc2vec')
     model.save(filename)
-    filename = op.join(input_dir, f'{board}.vectors')
-    model.docvecs.save_word2vec_format(filename)
 
 
 def build_word2vec_model(board: str, vectors: int, input_dir: str='.'):
-    sentences = LineSentence(op.join(input_dir, f'{board}.threads'))
+    filename = op.join(input_dir, f'{board}.phraser')
+    phraser: Phraser = Phraser.load(filename)
+    sentences = ReadThreads(
+        board, input_dir, 'phrases',
+        return_func=lambda x, y: phraser[y.split()])
     model = Word2Vec(
         sentences=sentences,
         size=vectors, window=5, min_count=5, workers=4)
 
-    filename = op.join(input_dir, f'{board}.wordmodel')
+    filename = op.join(input_dir, f'{board}.word2vec')
     model.wv.save(filename)
 
 
 def load_sample_vectors(board: str, frac: float=1.0, input_dir: str='.'
                         ) -> pd.DataFrame:
-    filename = op.join(input_dir, f'{board}.vectors')
+    filename = op.join(input_dir, f'{board}.doc2vectors')
     df = pd.read_csv(
         filename, skiprows=1, index_col=0, delim_whitespace=True, header=None)
     df['thread_id'] = df.index.str.replace('\*dt_', '')
@@ -299,16 +352,36 @@ def main():
 
             with Benchmark('export_threads'):
                 export_threads(board, conn, input_dir=input_dir)
-
-    filename = op.join(input_dir, f'{board}.vectors')
+                
+    filename = op.join(input_dir, f'{board}.phraser')
     if not op.isfile(filename):
-        with Benchmark('build_doc2vec_model'):
-            build_doc2vec_model(board, vectors, input_dir=input_dir)
+        with Benchmark('build_phraser'):
+            build_phraser(board, input_dir)
 
-    filename = op.join(input_dir, f'{board}.wordvectors')
+    filename = op.join(input_dir, f'{board}.phrases')
+    if not op.isfile(filename):
+        with Benchmark('build_phrases'):
+            build_phrases(board, input_dir)
+
+    filename = op.join(input_dir, f'{board}.dictionary')
+    if not op.isfile(filename):
+        with Benchmark('build_dictionary'):
+            build_dictionary(board, input_dir)
+
+    filename = op.join(input_dir, f'{board}.lda')
+    if not op.isfile(filename):
+        with Benchmark('build_lda_model'):
+            build_lda_model(board, input_dir)
+
+    filename = op.join(input_dir, f'{board}.word2vec')
     if not op.isfile(filename):
         with Benchmark('build_word2vec_model'):
             build_word2vec_model(board, vectors, input_dir=input_dir)
+
+    filename = op.join(input_dir, f'{board}.doc2vec')
+    if not op.isfile(filename):
+        with Benchmark('build_doc2vec_model'):
+            build_doc2vec_model(board, vectors, input_dir=input_dir)
 
     filename = op.join(input_dir, f'{board}.clusters')
     if not op.isfile(filename):
