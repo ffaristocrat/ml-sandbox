@@ -9,6 +9,7 @@ from typing import List, Dict, Callable
 import pandas as pd
 
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+from gensim.models.word2vec import Word2Vec, LineSentence
 
 from chan.utils import Benchmark, tokenize_string, cluster
 
@@ -215,6 +216,16 @@ def build_doc2vec_model(board: str, vectors: int, input_dir: str='.'):
     model.docvecs.save_word2vec_format(filename)
 
 
+def build_word2vec_model(board: str, vectors: int, input_dir: str='.'):
+    sentences = LineSentence(op.join(input_dir, f'{board}.threads'))
+    model = Word2Vec(
+        sentences=sentences,
+        size=vectors, window=5, min_count=5, workers=4)
+
+    filename = op.join(input_dir, f'{board}.wordmodel')
+    model.wv.save(filename)
+
+
 def load_sample_vectors(board: str, frac: float=1.0, input_dir: str='.'
                         ) -> pd.DataFrame:
     filename = op.join(input_dir, f'{board}.vectors')
@@ -293,6 +304,11 @@ def main():
     if not op.isfile(filename):
         with Benchmark('build_doc2vec_model'):
             build_doc2vec_model(board, vectors, input_dir=input_dir)
+
+    filename = op.join(input_dir, f'{board}.wordvectors')
+    if not op.isfile(filename):
+        with Benchmark('build_word2vec_model'):
+            build_word2vec_model(board, vectors, input_dir=input_dir)
 
     filename = op.join(input_dir, f'{board}.clusters')
     if not op.isfile(filename):
