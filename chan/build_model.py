@@ -3,7 +3,6 @@ import logging
 import os.path as op
 import csv
 import datetime
-import gzip
 
 from datetime import datetime
 from typing import List, Dict, Callable
@@ -15,8 +14,9 @@ from gensim.models.word2vec import Word2Vec
 from gensim.models.phrases import Phrases, Phraser
 from gensim.corpora.dictionary import Dictionary
 from gensim.models.ldamulticore import LdaMulticore
+from gensim.parsing.preprocessing import STOPWORDS
 
-from chan.utils import benchmark, clean_string, cluster
+from chan.utils import benchmark, clean_string
 
 logging.basicConfig(
     format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
@@ -167,6 +167,39 @@ class Chanalysis:
             conn.executescript(index_sql)
 
     @benchmark
+    def load_phrases(self):
+        create_sql = f"""
+            DROP TABLE IF EXISTS
+                {self.board}_phrases;
+            CREATE TABLE {self.board}_phrases (
+                thread_num INTEGER,
+                comment TEXT
+            );
+        """
+
+        insert_sql = f"""
+            INSERT INTO {self.board}_phrases
+                (thread_num, comment)
+            VALUES
+                (?, ?);
+        """
+
+        index_sql = f"""
+            CREATE INDEX
+                idx_{self.board}_phrases_thread_num
+            ON {self.board}_phrases
+                (thread_num);
+        """
+
+        with sqlite3.Connection(self.database) as conn:
+            conn.executescript(create_sql)
+            conn.executemany(insert_sql, ReadThreads(
+                self.board, input_dir=self.input_dir, file_type='phrases',
+                return_func=lambda x, y: (x, y))
+            )
+            conn.executescript(index_sql)
+
+    @benchmark
     def extract_meta(self):
         filename = op.join(self.input_dir, f'{self.board}.meta')
         with open(filename, 'wt') as f:
@@ -195,32 +228,42 @@ class Chanalysis:
                 writer.writerow(df)
     
     @benchmark
-    def export_threads(self, sample: float = 1.0):
+    def export_threads(self, sample: float=1.0):
         with sqlite3.Connection(self.database) as conn:
             sql = f"SELECT COUNT(DISTINCT thread_num) FROM {self.board}"
 
             rows = int(conn.execute(sql).fetchone()[0] * sample)
             print(f'Exporting {rows} rows')
 
-            sql = f"""
-                SELECT
-                    thread_num, comment, op
-                FROM
-                    {self.board}
-                WHERE
-                    thread_num IN (
-                        SELECT DISTINCT
-                            thread_num
-                        FROM
-                            {self.board}
-                        ORDER BY
-                            RANDOM()
-                        LIMIT {rows}
-                    )
-                ORDER BY
-                    thread_num, num
-            """
-
+            if sample < 1.0:
+                sql = f"""
+                    SELECT
+                        thread_num, comment, op
+                    FROM
+                        {self.board}
+                    WHERE
+                        thread_num IN (
+                            SELECT DISTINCT
+                                thread_num
+                            FROM
+                                {self.board}
+                            ORDER BY
+                                RANDOM()
+                            LIMIT {rows}
+                        )
+                    ORDER BY
+                        thread_num, num
+                """
+            else:
+                sql = f"""
+                    SELECT
+                        thread_num, comment, op
+                    FROM
+                        {self.board}
+                    ORDER BY
+                        thread_num, num
+                """
+                
             current_thread = None
             document = ""
             filename = op.join(self.input_dir, f'{self.board}.threads')
@@ -239,26 +282,38 @@ class Chanalysis:
                     current_thread = thread_num
 
     @benchmark
-    def build_phraser(self):
+    def build_phraser(self, threshold: int=None):
         tokens = ReadThreads(
             self.board, self.input_dir, return_func=lambda x, y: y.split())
-        model = Phrases(tokens, threshold=100)
-        phraser = Phraser(model)
-        filename = op.join(self.input_dir, f'{self.board}.phraser')
-        phraser.save(filename)
+        bigram = Phrases(tokens, min_count=5, threshold=threshold)
+        trigram = Phrases(bigram[tokens], threshold=threshold)
+
+        bigram_mod = Phraser(bigram)
+        trigram_mod = Phraser(trigram)
+
+        filename = op.join(self.input_dir, f'{self.board}.bigrams')
+        bigram_mod.save(filename)
+        filename = op.join(self.input_dir, f'{self.board}.trigrams')
+        trigram_mod.save(filename)
+
+        return trigram_mod
 
     @benchmark
     def build_phrases(self):
         threads = ReadThreads(
             self.board, self.input_dir,
             return_func=lambda x, y: (x, y.split()))
-        filename = op.join(self.input_dir, f'{self.board}.phraser')
-        phraser = Phraser.load(filename)
-        
+        filename = op.join(self.input_dir, f'{self.board}.trigrams')
+        trigram_mod = Phraser.load(filename)
+
         filename = op.join(self.input_dir, f'{self.board}.phrases')
         with open(filename, 'wt') as f:
             for num, thread in threads:
-                line = ' '.join(phraser[thread])
+                line = ' '.join([
+                    word for word in trigram_mod[thread]
+                    if word not in STOPWORDS and
+                    len(word) >= 3
+                ])
                 print(f'{num}\t{line}', file=f)
 
     @benchmark
@@ -268,19 +323,32 @@ class Chanalysis:
             return_func=lambda x, y: y.split())
         dictionary = Dictionary(documents)
         dictionary.save(f'{self.board}.dictionary')
+        
+        return dictionary
     
     @benchmark
-    def build_lda_model(self):
-        dictionary: Dictionary = Dictionary.load(f'{self.board}.dictionary')
+    def build_lda_model(self, topics: int=20):
+        ignore_words = [
+            'like', 'know', 'fuck', 'fucking', 'want', 'shit', 'know', 'sure',
+            'isn', 'CHANBOARD', 'think', 'people', 'good', 'time', 'going',
+            'WEBLINK', 'got', 'way', ''
+        ]
+        filename = op.join(self.input_dir, f'{self.board}.dictionary')
+        dictionary: Dictionary = Dictionary.load(filename)
         documents = ReadThreads(
             self.board, input_dir=self.input_dir, file_type='phrases',
-            return_func=lambda x, y: dictionary.doc2bow(y.split()))
-        
+            return_func=lambda x, y: dictionary.doc2bow(
+                [w for w in y.split() if w not in ignore_words]
+            )
+        )
+
         lda = LdaMulticore(
-            documents, id2word=dictionary, num_topics=20)
-        
+            documents, id2word=dictionary, num_topics=topics, iterations=2)
+
         filename = op.join(self.input_dir, f'{self.board}.lda')
         lda.save(filename)
+
+        return lda
 
     @benchmark
     def build_doc2vec_model(self, vectors: int=200):
@@ -300,6 +368,8 @@ class Chanalysis:
         
         filename = op.join(self.input_dir, f'{self.board}.doc2vec')
         model.save(filename)
+
+        return model
     
     @benchmark
     def build_word2vec_model(self, vectors: int=200):
@@ -314,6 +384,8 @@ class Chanalysis:
         
         filename = op.join(self.input_dir, f'{self.board}.word2vec')
         model.wv.save(filename)
+        
+        return model
 
     @benchmark
     def load_sample_vectors(self, frac: float = 1.0) -> pd.DataFrame:
@@ -379,11 +451,11 @@ def main():
     
     chan = Chanalysis(board=board, database=database, input_dir=input_dir)
 
-    # chan.export_threads(0.05)
-    chan.build_phraser()
+    chan.export_threads(sample=1.00)
+    chan.build_phraser(threshold=50)
     chan.build_phrases()
     chan.build_dictionary()
-    chan.build_lda_model()
+    chan.build_word2vec_model(vectors=vectors)
 
 
 if __name__ == '__main__':
