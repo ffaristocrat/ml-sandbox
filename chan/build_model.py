@@ -373,11 +373,9 @@ class Chanalysis:
     
     @benchmark
     def build_word2vec_model(self, vectors: int=200):
-        filename = op.join(self.input_dir, f'{self.board}.phraser')
-        phraser: Phraser = Phraser.load(filename)
         sentences = ReadThreads(
             self.board, self.input_dir, 'phrases',
-            return_func=lambda x, y: phraser[y.split()])
+            return_func=lambda x, y: y.split())
         model = Word2Vec(
             sentences=sentences,
             size=vectors, window=5, min_count=5, workers=3)
