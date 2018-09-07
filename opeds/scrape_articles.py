@@ -1,10 +1,8 @@
-import csv
-import time
+import os
 from typing import List, Tuple
 
 import pandas as pd
 
-import selenium
 from selenium import webdriver
 
 chromedriver = '/usr/local/Caskroom/chromedriver'
@@ -54,7 +52,7 @@ def get_article_urls(name) -> pd.DataFrame:
     return df
 
 
-def parse_article(row):
+def parse_article(row) -> Tuple:
     driver.get(row['urls'])
     body = driver.find_element_by_css_selector('div.body').text
     byline = driver.find_element_by_css_selector('span.val').text
@@ -69,26 +67,26 @@ def read_names(filename) -> List[str]:
 
 
 def main():
-    user_id = 2486542
+    user_id = os.environ.get('USER_ID')
     filename = 'senior_admin_officials.txt'
 
     login(user_id)
 
-    # df = pd.DataFrame()
-    # names = read_names(filename)
-    #
-    # for name in names:
-    #     print(name)
-    #     run_search(name)
-    #     df = df.append(get_article_urls(name))
-    #
-    # df.to_csv('urls.txt', index=False)
+    df = pd.DataFrame()
+    names = read_names(filename)
+
+    for name in names:
+        print(name)
+        run_search(name)
+        df = df.append(get_article_urls(name))
+
+    df.to_csv('urls.txt', index=False)
     df = pd.read_csv('urls.txt', header=0)
 
     df2 = df.apply(lambda x: parse_article(x), axis=1, result_type='expand')
-    df2.to_csv('articles.txt', index=False)
+    df2.to_csv('articles.txt', headers=True, index=False)
 
-    # driver.close()
+    driver.close()
 
 
 if __name__ == '__main__':
