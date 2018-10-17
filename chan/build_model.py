@@ -359,7 +359,7 @@ class Chanalysis:
             return_func=lambda x, y: TaggedDocument(phraser[y.split()], [x]))
         model = Doc2Vec(vector_size=vectors, window=2, min_count=5, workers=3)
         model.build_vocab(documents=documents)
-        
+
         model.train(
             documents=documents,
             total_examples=model.corpus_count,
