@@ -57,7 +57,7 @@ def parse_article(row) -> Tuple:
     body = driver.find_element_by_css_selector('div.body').text
     byline = driver.find_element_by_css_selector('span.val').text
 
-    return row['urls'], body, byline
+    return row['urls'], row['name'], body, byline
 
 
 def read_names(filename) -> List[str]:
