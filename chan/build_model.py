@@ -75,14 +75,14 @@ def yield_line(filename: str, parse_func: Callable):
             quotechar='"',
             escapechar='\\',
         )
-    
+
         for line in reader:
             yield parse_func(line)
 
 
 class ReadThreads(object):
-    def __init__(self, board: str, input_dir: str='.',
-                 file_type: str='threads', return_func: Callable=None):
+    def __init__(self, board: str, input_dir: str = '.',
+                 file_type: str = 'threads', return_func: Callable = None):
         self.board = board
         self.input_dir = input_dir
         self.returner = return_func
@@ -97,7 +97,7 @@ class ReadThreads(object):
 
 
 class Chanalysis:
-    def __init__(self, board: str, database: str, input_dir: str='.'):
+    def __init__(self, board: str, database: str, input_dir: str = '.'):
         self.board = board
         self.database = database
         self.input_dir = input_dir
@@ -204,31 +204,31 @@ class Chanalysis:
         filename = op.join(self.input_dir, f'{self.board}.meta')
         with open(filename, 'wt') as f:
             writer = None
-    
+
             for df in yield_line(self.board, self._parse_for_meta):
                 df['trip'] = 1 if df['trip'] else 0
                 df['image'] = 1 if int(df['media_w']) > 0 else 0
                 df['landscape'] = \
                     1 if int(df['media_w']) > int(df['media_h']) else 0
-    
+
                 for k, v in COUNTRIES.items():
                     df[f'country_{k}'] = 1 if df['poster_country'] in v else 0
                 df['country_null'] = 1 if not df['poster_country'] else 0
-    
+
                 df['timestamp'] = datetime.fromtimestamp(int(df['timestamp']))
                 df['hour'] = df['timestamp'].hour
-    
+
                 for k, v in HOURS.items():
                     df['hour_{k{'] = 1 if df['hour'] in v else 0
-    
+
                 if not writer:
                     writer = csv.DictWriter(f, fieldnames=df.keys())
                     writer.writeheader()
-    
+
                 writer.writerow(df)
-    
+
     @benchmark
-    def export_threads(self, sample: float=1.0):
+    def export_threads(self, sample: float = 1.0):
         with sqlite3.Connection(self.database) as conn:
             sql = f"SELECT COUNT(DISTINCT thread_num) FROM {self.board}"
 
@@ -263,7 +263,7 @@ class Chanalysis:
                     ORDER BY
                         thread_num, num
                 """
-                
+
             current_thread = None
             document = ""
             filename = op.join(self.input_dir, f'{self.board}.threads')
@@ -282,7 +282,7 @@ class Chanalysis:
                     current_thread = thread_num
 
     @benchmark
-    def build_phraser(self, threshold: int=None):
+    def build_phraser(self, threshold: int = None):
         tokens = ReadThreads(
             self.board, self.input_dir, return_func=lambda x, y: y.split())
         bigram = Phrases(tokens, min_count=5, threshold=threshold)
@@ -323,11 +323,11 @@ class Chanalysis:
             return_func=lambda x, y: y.split())
         dictionary = Dictionary(documents)
         dictionary.save(f'{self.board}.dictionary')
-        
+
         return dictionary
-    
+
     @benchmark
-    def build_lda_model(self, topics: int=20):
+    def build_lda_model(self, topics: int = 20):
         ignore_words = [
             'like', 'know', 'fuck', 'fucking', 'want', 'shit', 'know', 'sure',
             'isn', 'CHANBOARD', 'think', 'people', 'good', 'time', 'going',
@@ -351,7 +351,7 @@ class Chanalysis:
         return lda
 
     @benchmark
-    def build_doc2vec_model(self, vectors: int=200):
+    def build_doc2vec_model(self, vectors: int = 200):
         filename = op.join(self.input_dir, f'{self.board}.phraser')
         phraser = Phraser.load(filename)
         documents = ReadThreads(
@@ -365,24 +365,24 @@ class Chanalysis:
             total_examples=model.corpus_count,
             epochs=model.iter,
         )
-        
+
         filename = op.join(self.input_dir, f'{self.board}.doc2vec')
         model.save(filename)
 
         return model
-    
+
     @benchmark
-    def build_word2vec_model(self, vectors: int=200):
+    def build_word2vec_model(self, vectors: int = 200):
         sentences = ReadThreads(
             self.board, self.input_dir, 'phrases',
             return_func=lambda x, y: y.split())
         model = Word2Vec(
             sentences=sentences,
             size=vectors, window=5, min_count=5, workers=3)
-        
+
         filename = op.join(self.input_dir, f'{self.board}.word2vec')
         model.wv.save(filename)
-        
+
         return model
 
     @benchmark
@@ -391,12 +391,12 @@ class Chanalysis:
         df = pd.read_csv(
             filename, skiprows=1, index_col=0,
             delim_whitespace=True, header=None)
-        df['thread_id'] = df.index.str.replace('\*dt_', '')
+        df['thread_id'] = df.index.str.replace('*dt_', '')
         df.set_index('thread_id', inplace=True)
-        
+
         df = df.sample(frac=frac)
         print(f'{len(df)} records')
-        
+
         return df
 
     @benchmark
@@ -446,7 +446,7 @@ def main():
     database = 'chan.db'
     vectors = 200
     input_dir = '.'
-    
+
     chan = Chanalysis(board=board, database=database, input_dir=input_dir)
 
     chan.export_threads(sample=1.00)
