@@ -448,6 +448,7 @@ def main():
     input_dir = '.'
 
     chan = Chanalysis(board=board, database=database, input_dir=input_dir)
+    chan.load_archive()
 
     chan.export_threads(sample=1.00)
     chan.build_phraser(threshold=50)
