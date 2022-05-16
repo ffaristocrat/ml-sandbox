@@ -3,4 +3,6 @@ scikit-learn
 gensim
 numpy
 pillow
-tensorflow
+geopandas
+jupyter
+matplotlib
