@@ -288,8 +288,8 @@ class Chanalysis:
         with sqlite3.Connection(self.database) as conn:
             sql = f"SELECT COUNT(DISTINCT thread_num) FROM {self.board}"
 
-            rows = int(conn.execute(sql).fetchone()[0] * sample)
-            print(f"Exporting {rows} rows")
+            threads = int(conn.execute(sql).fetchone()[0] * sample)
+            print(f"Exporting {threads} threads")
 
             if sample < 1.0:
                 sql = f"""
@@ -305,7 +305,7 @@ class Chanalysis:
                                 {self.board}
                             ORDER BY
                                 RANDOM()
-                            LIMIT {rows}
+                            LIMIT {threads}
                         )
                     ORDER BY
                         thread_num, num
@@ -338,7 +338,7 @@ class Chanalysis:
                     current_thread = thread_num
 
     @benchmark
-    def build_phraser(self, threshold: int = None):
+    def build_phraser(self, threshold: int = None) -> Phraser:
         tokens = ReadThreads(
             self.board, self.input_dir, return_func=lambda x, y: y.split()
         )
@@ -376,7 +376,7 @@ class Chanalysis:
                 print(f"{num}\t{line}", file=f)
 
     @benchmark
-    def build_dictionary(self):
+    def build_dictionary(self) -> Dictionary:
         documents = ReadThreads(
             self.board,
             input_dir=self.input_dir,
@@ -389,7 +389,7 @@ class Chanalysis:
         return dictionary
 
     @benchmark
-    def build_lda_model(self, topics: int = 20):
+    def build_lda_model(self, topics: int = 20) -> LdaMulticore:
         ignore_words = [
             "like",
             "know",
@@ -432,7 +432,7 @@ class Chanalysis:
         return lda
 
     @benchmark
-    def build_doc2vec_model(self, vectors: int = 200):
+    def build_doc2vec_model(self, vectors: int = 200) -> Doc2Vec:
         filename = op.join(self.input_dir, f"{self.board}.phraser")
         phraser = Phraser.load(filename)
         documents = ReadThreads(
@@ -445,7 +445,7 @@ class Chanalysis:
         model.build_vocab(documents=documents)
 
         model.train(
-            documents=documents, total_examples=model.corpus_count, epochs=model.iter
+            documents=documents, total_examples=model.corpus_count, epochs=model.epochs
         )
 
         filename = op.join(self.input_dir, f"{self.board}.doc2vec")
@@ -454,12 +454,12 @@ class Chanalysis:
         return model
 
     @benchmark
-    def build_word2vec_model(self, vectors: int = 200):
+    def build_word2vec_model(self, vectors: int = 200) -> Word2Vec:
         sentences = ReadThreads(
             self.board, self.input_dir, "phrases", return_func=lambda x, y: y.split()
         )
         model = Word2Vec(
-            sentences=sentences, size=vectors, window=5, min_count=5, workers=3
+            sentences=sentences, vector_size=vectors, window=5, min_count=5, workers=3
         )
 
         filename = op.join(self.input_dir, f"{self.board}.word2vec")
