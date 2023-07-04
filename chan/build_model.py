@@ -5,7 +5,7 @@ import csv
 import datetime
 
 from datetime import datetime
-from typing import List, Dict, Callable
+from typing import Callable
 
 import pandas as pd
 
@@ -160,13 +160,13 @@ class Chanalysis:
         self.input_dir = input_dir
 
     @staticmethod
-    def _parse_for_database(line: Dict) -> List:
+    def _parse_for_database(line: dict) -> list:
         return [
             None if v == "N" else v for k, v in line.items() if k in DATABASE_COLUMNS
         ]
 
     @staticmethod
-    def _parse_for_meta(line: Dict) -> Dict:
+    def _parse_for_meta(line: dict) -> dict:
         return {
             k: None if v == "N" else v for k, v in line.items() if k in META_COLUMNS
         }
